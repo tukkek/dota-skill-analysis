@@ -12,9 +12,9 @@ PLAYERS=[]
 NOBS=[]
 GOODNOBS=[]
 BADNOBS=[]
-KDAC={} #Summary per hero name
-GPM={} #Summary per hero name
-XPM={} #Summary per hero name
+KDAC={} #hero summary per hero name
+GPM={} #hero summary per hero name
+XPM={} #hero summary per hero name
 
 gkdac=None
 ggpm=None
@@ -22,7 +22,8 @@ gxpm=None
 score=None
 
 class Player:
-  def __init__(self,data):
+  def __init__(self,data,team):
+    self.team=team
     self.hero=HEROES[data['hero_id']]
     self.name=self.hero['localized_name']
     self.kills=data['kills']
@@ -39,14 +40,15 @@ class Player:
     r+=f'  {self.name}\n'
     #r+=f'    Level {self.level}\n'
     r+=f'    KDA {self.kills}/{self.deaths}/{self.assists}\n'
-    r+=f'    cKPD {self.kdac:.1f}\n'
+    r+=f'    KDAC {self.kdac:.1f}\n'
     r+=f'    GPM {self.gpm}\n'
     r+=f'    XPM {self.xpm}\n'
     r+=f'    Score {self.score:.0f}\n'
     return r[:-1]
   
   def isnob(self,absolute=True):
-    return abs(self.score)>=NOBLIMIT if absolute else score.median+score.deviation*NOBLIMIT
+    score=abs(self.score)
+    return score>=NOBLIMIT if absolute else score>=gscore.median+gscore.deviation*NOBLIMIT
 
 class Team:
   def __init__(self):
@@ -83,7 +85,7 @@ class Match:
     winner.won=True
     for p in data['players']:
       team=self.radiant if p['isRadiant'] else self.dire
-      p=Player(p)
+      p=Player(p,team)
       team.players.append(p)
       PLAYERS.append(p)
     
@@ -118,7 +120,7 @@ class Summary:
     return r[:-1]
   
   def score(self,p):
-    return (p-self.median)/self.deviation
+    return 0 if self.deviation==0 else (p-self.median)/self.deviation
 
 def validate(match):
   for p in match['players']:
@@ -176,20 +178,40 @@ def examineheroes(output=False,alphabetical=True,delimiter=' ',warn=True):
   if output:
     printheroes(frequency,alphabetical,delimiter)
 
-def examinematches(output=True,matchstats=True,herostats=True,globalstats=True):
+def crunch(players):
+  kdac=[]
+  gpm=[]
+  xpm=[]
+  for p in players:
+    kdac.append(p.kdac)
+    gpm.append(p.gpm)
+    xpm.append(p.xpm)
+  return {
+    'kdac':Summary(kdac,rounding=0),
+    'gpm':Summary(gpm,rounding=0),
+    'xpm':Summary(xpm,rounding=0),
+  }
+
+def examinematches(output=True,teamstats=True,matchstats=True,herostats=True,globalstats=True):
   global gkdac,ggpm,gxpm,gscore
   gkdac=Summary([p.kdac for p in PLAYERS])
   ggpm=Summary([p.gpm for p in PLAYERS],rounding=0)
   gxpm=Summary([p.xpm for p in PLAYERS],rounding=0)
   for m in MATCHES:
     players=[p for p in m.getplayers()]
-    kdac=Summary([p.kdac for p in players])
-    gpm=Summary([p.gpm for p in players],rounding=0)
-    xpm=Summary([p.xpm for p in players],rounding=0)
+    match=crunch(players)
+    radiant=crunch(m.radiant.players)
+    dire=crunch(m.dire.players)
     for p in players:
       scores=[]
+      if teamstats:
+        assert(p.team==m.radiant or p.team==m.dire)
+        team=radiant if p.team==m.radiant else dire
+        #print(m)
+        #print(team)
+        scores.extend([team['kdac'].score(p.kdac),team['gpm'].score(p.gpm),team['xpm'].score(p.xpm)])
       if matchstats:
-        scores.extend([kdac.score(p.kdac),gpm.score(p.gpm),xpm.score(p.xpm)])
+        scores.extend([match['kdac'].score(p.kdac),match['gpm'].score(p.gpm),match['xpm'].score(p.xpm)])
       if herostats:
         scores.extend([KDAC[p.name].score(p.kdac),GPM[p.name].score(p.gpm),XPM[p.name].score(p.xpm)])
       if globalstats:
@@ -203,7 +225,7 @@ def examinematches(output=True,matchstats=True,herostats=True,globalstats=True):
         
 def examinemetrics(output=True): #used to calibrate and test overall metric sanity
   if output:
-    print(f'cKPD\t{gkdac}')
+    print(f'KDAC\t{gkdac}')
     print(f'GPM\t{ggpm}')
     print(f'XPM\t{gxpm}')
     print(f'Score\t{str(gscore)}')
@@ -221,16 +243,16 @@ def printnobs(output=True,printall=False,randomize=False):
         GOODNOBS.append(n)
       else:
         BADNOBS.append(n)
-    print(f'{len(NOBS)} nobs ({round(100*len(NOBS)/(len(MATCHES)*10))}% of players, {len(GOODNOBS)} positive, {len(BADNOBS)} negative).')
+    print(f'{len(NOBS)} NOBs ({round(100*len(NOBS)/(len(MATCHES)*10))}% of players, {len(GOODNOBS)} positive, {len(BADNOBS)} negative).')
     nobspermatch=[sum(p.isnob() for p in m.getplayers()) for m in MATCHES]
-    print(f'Nobs per match: {Summary(nobspermatch,rounding=0)}.')
+    print(f'NOBs per match: {Summary(nobspermatch,rounding=0)}.')
     balanced=sum(n==0 for n in nobspermatch)
     print(f'Balanced matches: {round(100*balanced/len(MATCHES))}% ({balanced}).')
     print()
     
 def examineimpact(output=False,parseable=open('impact.csv','w')):
   if parseable:
-    parseable.write(f'Score;Win rate (%);Frequency in matches(%);\n')
+    parseable.write(f'Score;Win rate (%);Frequency in teams (%);\n')
   teams=[]
   for m in MATCHES:
     teams.append(m.radiant)
@@ -250,7 +272,7 @@ def examineimpact(output=False,parseable=open('impact.csv','w')):
       winrate=round(100*wins/total)
       frequency=round(100*total/(len(MATCHES)*2))
       if output:
-        print(f'{score} score or higher score predicts a {winrate}% win rate (present in {frequency} of teams).')
+        print(f'Presence of {score} score predicts a {winrate}% win rate (present in {frequency}% of teams).')
       if parseable:
         parseable.write(f'{score};{winrate};{frequency};\n')
   if output:
