@@ -200,37 +200,33 @@ def crunch(players):
     'xpm':Summary(xpm,rounding=0),
   }
 
-def scoreroles(player):
-  kdac=[]
-  gpm=[]
-  xpm=[]
-  for r in player.hero['roles']:
-    r=ROLES[r]
-    kdac.append(r['kdac'].score(player.kdac))
-    gpm.append(r['gpm'].score(player.gpm))
-    xpm.append(r['xpm'].score(player.xpm))
-  return [statistics.median(scores) for scores in [kdac,gpm,xpm]]
+def collapse(values): 
+  return [] if len(values)==0 else [statistics.median(values)]
 
 def score(p,team,match,hero,role,universal):
   local=[]
   nlocal=[]
   if team:
-    local.extend([team['kdac'].score(p.kdac),team['gpm'].score(p.gpm),team['xpm'].score(p.xpm)])
+    local+=collapse([team['kdac'].score(p.kdac),team['gpm'].score(p.gpm),team['xpm'].score(p.xpm)])
   if match:
-    local.extend([match['kdac'].score(p.kdac),match['gpm'].score(p.gpm),match['xpm'].score(p.xpm)])
+    local+=collapse([match['kdac'].score(p.kdac),match['gpm'].score(p.gpm),match['xpm'].score(p.xpm)])
   if hero:
-    nlocal.extend([KDAC[p.name].score(p.kdac),GPM[p.name].score(p.gpm),XPM[p.name].score(p.xpm)])
+    nlocal+=collapse([KDAC[p.name].score(p.kdac),GPM[p.name].score(p.gpm),XPM[p.name].score(p.xpm)])
   if role:
-    nlocal.extend(scoreroles(p))
+    kdac=[]
+    gpm=[]
+    xpm=[]
+    for r in p.hero['roles']:
+      r=ROLES[r]
+      kdac.append(r['kdac'].score(p.kdac))
+      gpm.append(r['gpm'].score(p.gpm))
+      xpm.append(r['xpm'].score(p.xpm))
+    nlocal+=collapse([collapse(score)[0] for score in [kdac,gpm,xpm]])
   if universal:
-    nlocal.extend([gkdac.score(p.kdac),ggpm.score(p.gpm),gxpm.score(p.xpm)])
-  scores=[]
-  if len(local)>0:
-    scores.append(statistics.median(local))
-  if len(nlocal)>0:
-    scores.append(statistics.median(nlocal))
+    nlocal+=collapse([gkdac.score(p.kdac),ggpm.score(p.gpm),gxpm.score(p.xpm)])
+  scores=collapse(local)+collapse(nlocal)
   assert len(scores)>0
-  return statistics.median(scores)
+  return collapse(scores)[0]
 
 def examinematches(output=True,team=True,match=True,hero=True,role=True,universal=True):
   global gkdac,ggpm,gxpm,gscore
