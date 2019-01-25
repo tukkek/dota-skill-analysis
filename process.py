@@ -116,7 +116,7 @@ class Summary:
   
   def __repr__(self):
     r=f'{self.round(self.median):5.1f}\t± {self.round(self.deviation):5.1f}\t'
-    return r
+    return r[:-1]
   
   def score(self,p):
     return 0 if self.deviation==0 else (p-self.median)/self.deviation
@@ -211,6 +211,27 @@ def scoreroles(player):
     xpm.append(r['xpm'].score(player.xpm))
   return [statistics.median(scores) for scores in [kdac,gpm,xpm]]
 
+def score(p,team,match,hero,role,universal):
+  local=[]
+  nlocal=[]
+  if team:
+    local.extend([team['kdac'].score(p.kdac),team['gpm'].score(p.gpm),team['xpm'].score(p.xpm)])
+  if match:
+    local.extend([match['kdac'].score(p.kdac),match['gpm'].score(p.gpm),match['xpm'].score(p.xpm)])
+  if hero:
+    nlocal.extend([KDAC[p.name].score(p.kdac),GPM[p.name].score(p.gpm),XPM[p.name].score(p.xpm)])
+  if role:
+    nlocal.extend(scoreroles(p))
+  if universal:
+    nlocal.extend([gkdac.score(p.kdac),ggpm.score(p.gpm),gxpm.score(p.xpm)])
+  scores=[]
+  if len(local)>0:
+    scores.append(statistics.median(local))
+  if len(nlocal)>0:
+    scores.append(statistics.median(nlocal))
+  assert len(scores)>0
+  return statistics.median(scores)
+
 def examinematches(output=True,team=True,match=True,hero=True,role=True,universal=True):
   global gkdac,ggpm,gxpm,gscore
   gkdac=Summary([p.kdac for p in PLAYERS])
@@ -218,25 +239,12 @@ def examinematches(output=True,team=True,match=True,hero=True,role=True,universa
   gxpm=Summary([p.xpm for p in PLAYERS],rounding=0)
   for m in MATCHES:
     players=[p for p in m.getplayers()]
-    match=crunch(players)
-    radiant=crunch(m.radiant.players)
-    dire=crunch(m.dire.players)
+    match=crunch(players) if match else False
+    radiant=crunch(m.radiant.players) if team else False
+    dire=crunch(m.dire.players) if team else False
     for p in players:
-      scores=[]
-      if team:
-        assert(p.team==m.radiant or p.team==m.dire)
-        team=radiant if p.team==m.radiant else dire
-        scores.extend([team['kdac'].score(p.kdac),team['gpm'].score(p.gpm),team['xpm'].score(p.xpm)])
-      if match:
-        scores.extend([match['kdac'].score(p.kdac),match['gpm'].score(p.gpm),match['xpm'].score(p.xpm)])
-      if hero:
-        scores.extend([KDAC[p.name].score(p.kdac),GPM[p.name].score(p.gpm),XPM[p.name].score(p.xpm)])
-      if role:
-        scores.extend(scoreroles(p))
-      if universal:
-        scores.extend([gkdac.score(p.kdac),ggpm.score(p.gpm),gxpm.score(p.xpm)])
-      assert len(scores)>0
-      p.score=statistics.median(scores)
+      playerteam=radiant if p.team==m.radiant else dire
+      p.score=score(p,playerteam,match,hero,role,universal)
   gscore=Summary([p.score for p in PLAYERS],rounding=2)
   for p in PLAYERS:
     if p.isnob():
