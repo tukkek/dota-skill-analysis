@@ -2,7 +2,7 @@
 import os,json,statistics,random
 from pathlib import Path
 
-MINIMUMHEROSAMPLE=10
+MINIMUMSAMPLESIZE=10
 NAMEPADDING=len('Keeper of the Light')
 NOBLIMIT=2
 INPUTDIR='matches'
@@ -10,11 +10,16 @@ HEROES={hero['id']:hero for hero in json.load(open('heroes.json'))}
 MATCHES=[]
 PLAYERS=[]
 NOBS=[]
+GOODNOBS=[]
+BADNOBS=[]
 KDAC={} #Summary per hero name
 GPM={} #Summary per hero name
 XPM={} #Summary per hero name
 
-score=False
+gkdac=None
+ggpm=None
+gxpm=None
+score=None
 
 class Player:
   def __init__(self,data):
@@ -40,8 +45,8 @@ class Player:
     r+=f'    Score {self.score:.0f}\n'
     return r[:-1]
   
-  def isnob(self):
-    return abs(self.score)>score.median+score.deviation*NOBLIMIT
+  def isnob(self,absolute=True):
+    return abs(self.score)>=NOBLIMIT if absolute else score.median+score.deviation*NOBLIMIT
 
 class Team:
   def __init__(self):
@@ -56,6 +61,18 @@ class Team:
   
   def win(self):
     return " (winner)" if self.won else ""
+  
+  def haspositivenob(self,score):
+    for p in self.players:
+      if p.score>=score:
+        return True
+    return False
+  
+  def hasnegativenob(self,score):
+    for p in self.players:
+      if p.score<=score:
+        return True
+    return False
 
 class Match:
   def __init__(self,data):
@@ -82,7 +99,7 @@ class Match:
       yield p
     for p in self.dire.players:
       yield p
-    
+      
 class Summary:
   def __init__(self,population,rounding=1):
     self.size=len(population)
@@ -97,9 +114,7 @@ class Summary:
   def __repr__(self):
     r=''
     r+=f'median {self.round(self.median)}\t'
-    #r+=f'average {self.round(self.mean)}\t'
     r+=f'median deviation {self.round(self.deviation)}\t'
-    #r+=f'outliers {round(100*self.outliers/self.size)}%\t'
     return r[:-1]
   
   def score(self,p):
@@ -156,12 +171,16 @@ def examineheroes(output=False,alphabetical=True,delimiter=' ',warn=True):
     KDAC[hero]=Summary(kdac[hero])
     GPM[hero]=Summary(gpm[hero])
     XPM[hero]=Summary(xpm[hero])
-    if warn and frequency[hero]<MINIMUMHEROSAMPLE:
-      raise Exception(f'Not enough samples for {hero}: {frequency[hero]}/{MINIMUMHEROSAMPLE}.')
+    if warn and frequency[hero]<MINIMUMSAMPLESIZE:
+      raise Exception(f'Not enough samples for {hero}: {frequency[hero]}/{MINIMUMSAMPLESIZE}.')
   if output:
     printheroes(frequency,alphabetical,delimiter)
 
-def examinematches(output=True,matchstats=True,herostats=True):
+def examinematches(output=True,matchstats=True,herostats=True,globalstats=True):
+  global gkdac,ggpm,gxpm,gscore
+  gkdac=Summary([p.kdac for p in PLAYERS])
+  ggpm=Summary([p.gpm for p in PLAYERS],rounding=0)
+  gxpm=Summary([p.xpm for p in PLAYERS],rounding=0)
   for m in MATCHES:
     players=[p for p in m.getplayers()]
     kdac=Summary([p.kdac for p in players])
@@ -173,20 +192,21 @@ def examinematches(output=True,matchstats=True,herostats=True):
         scores.extend([kdac.score(p.kdac),gpm.score(p.gpm),xpm.score(p.xpm)])
       if herostats:
         scores.extend([KDAC[p.name].score(p.kdac),GPM[p.name].score(p.gpm),XPM[p.name].score(p.xpm)])
+      if globalstats:
+        scores.extend([gkdac.score(p.kdac),ggpm.score(p.gpm),gxpm.score(p.xpm)])
       assert len(scores)>0
       p.score=statistics.median(scores)
-  global score
-  score=Summary([p.score for p in PLAYERS],rounding=2)
+  gscore=Summary([p.score for p in PLAYERS],rounding=2)
   for p in PLAYERS:
     if p.isnob():
       NOBS.append(p)
         
 def examinemetrics(output=True): #used to calibrate and test overall metric sanity
   if output:
-    print(f'cKPD\t{Summary([p.kdac for p in PLAYERS])}')
-    print(f'GPM\t{Summary([p.gpm for p in PLAYERS],rounding=0)}')
-    print(f'XPM\t{Summary([p.xpm for p in PLAYERS],rounding=0)}')
-    print(f'Score\t{str(score)}')
+    print(f'cKPD\t{gkdac}')
+    print(f'GPM\t{ggpm}')
+    print(f'XPM\t{gxpm}')
+    print(f'Score\t{str(gscore)}')
     print()
       
 def printnobs(output=True,printall=False,randomize=False):
@@ -196,23 +216,51 @@ def printnobs(output=True,printall=False,randomize=False):
         random.shuffle(NOBS)
       for n in NOBS:
         print(n)
-    good=[]
-    bad=[]
     for n in NOBS:
       if n.score>0:
-        good.append(n)
+        GOODNOBS.append(n)
       else:
-        bad.append(n)
-    print(f'{len(NOBS)} nobs ({round(100*len(NOBS)/(len(MATCHES)*10))}% of players, {len(good)} positive, {len(bad)} negative).')
+        BADNOBS.append(n)
+    print(f'{len(NOBS)} nobs ({round(100*len(NOBS)/(len(MATCHES)*10))}% of players, {len(GOODNOBS)} positive, {len(BADNOBS)} negative).')
     nobspermatch=[sum(p.isnob() for p in m.getplayers()) for m in MATCHES]
-    print(f'NOBS per match: {Summary(nobspermatch,rounding=0)}.')
+    print(f'Nobs per match: {Summary(nobspermatch,rounding=0)}.')
     balanced=sum(n==0 for n in nobspermatch)
     print(f'Balanced matches: {round(100*balanced/len(MATCHES))}% ({balanced}).')
     print()
+    
+def examineimpact(output=False,parseable=open('impact.csv','w')):
+  if parseable:
+    parseable.write(f'Score;Win rate (%);Frequency in matches(%);\n')
+  teams=[]
+  for m in MATCHES:
+    teams.append(m.radiant)
+    teams.append(m.dire)
+  scores=set()
+  for p in PLAYERS:
+    scores.add(round(p.score,1))
+  for score in sorted(scores):
+    wins=0
+    total=0
+    for t in teams:
+      if (score>0 and t.haspositivenob(score)) or (score<0 and t.hasnegativenob(score)) or score==0:
+        total+=1
+        if t.won:
+          wins+=1
+    if total>=MINIMUMSAMPLESIZE:
+      winrate=round(100*wins/total)
+      frequency=round(100*total/(len(MATCHES)*2))
+      if output:
+        print(f'{score} score or higher score predicts a {winrate}% win rate (present in {frequency} of teams).')
+      if parseable:
+        parseable.write(f'{score};{winrate};{frequency};\n')
+  if output:
+    print()
 
 read()
-examineheroes(output=False,alphabetical=True,warn=False)
-examinematches(output=True)
-examinemetrics(output=True)
-printnobs(randomize=True)
+examineheroes(warn=False)
+examinematches()
+examinemetrics()
+printnobs()
+examineimpact()
+#TODO would be cool to examine score per hero
 print(f'{len(MATCHES)} matches analyzed ({len(MATCHES)*10} players).')
