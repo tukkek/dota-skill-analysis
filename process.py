@@ -1,20 +1,29 @@
 #!/usr/bin/python3
-import os,json,statistics
+import os,json,statistics,random
 from pathlib import Path
 
+MINIMUMHEROSAMPLE=10
+NAMEPADDING=len('Keeper of the Light')
+NOBLIMIT=2
 INPUTDIR='matches'
 HEROES={hero['id']:hero for hero in json.load(open('heroes.json'))}
 MATCHES=[]
 PLAYERS=[]
-GLOBAL={} #global stats
+NOBS=[]
+KDAC={} #Summary per hero name
+GPM={} #Summary per hero name
+XPM={} #Summary per hero name
+
+score=False
 
 class Player:
   def __init__(self,data):
     self.hero=HEROES[data['hero_id']]
+    self.name=self.hero['localized_name']
     self.kills=data['kills']
     self.deaths=data['deaths']
     self.assists=data['assists']
-    self.kdc=self.kills+self.assists/10-self.deaths
+    self.kdac=self.kills+self.assists/10-self.deaths
     self.gpm=data['gold_per_min']
     self.xpm=data['xp_per_min']
     #self.level=data['level']
@@ -22,14 +31,17 @@ class Player:
   
   def __repr__(self):
     r=''
-    r+=f'  {self.hero["localized_name"]}\n'
+    r+=f'  {self.name}\n'
     #r+=f'    Level {self.level}\n'
     r+=f'    KDA {self.kills}/{self.deaths}/{self.assists}\n'
-    r+=f'    cKPD {self.kdc:.1f}\n'
+    r+=f'    cKPD {self.kdac:.1f}\n'
     r+=f'    GPM {self.gpm}\n'
     r+=f'    XPM {self.xpm}\n'
     r+=f'    Score {self.score:.0f}\n'
     return r[:-1]
+  
+  def isnob(self):
+    return abs(self.score)>score.median+score.deviation*NOBLIMIT
 
 class Team:
   def __init__(self):
@@ -76,12 +88,7 @@ class Summary:
     self.size=len(population)
     self.rounding=rounding
     self.median=statistics.median(population)
-    #self.mean=statistics.mean(population)
     self.deviation=statistics.median([abs(p-self.median) for p in population])
-    '''self.outliers=0
-    for p in population:
-      if not (self.median-self.deviation<=p<=self.median+self.deviation):
-        self.outliers+=1'''
   
   def round(self,value):
     r=round(value,self.rounding)
@@ -96,7 +103,6 @@ class Summary:
     return r[:-1]
   
   def score(self,p):
-    #print((p-self.median)/self.deviation)
     return (p-self.median)/self.deviation
 
 def validate(match):
@@ -118,43 +124,95 @@ def read():
 def printall():
   for m in MATCHES:
     print(m)
+    
+def printheroes(frequency,alphabetical,delimiter):
+  for hero in (sorted(frequency) if alphabetical else sorted(frequency,key=lambda f:frequency[f],reverse=True)):
+    line=[
+      hero.center(NAMEPADDING),
+      str(frequency[hero]).rjust(4),
+      f'{KDAC[hero].median:.1f}kdac'.rjust(8),
+      f'{GPM[hero].median:.0f}gpm'.rjust(5),
+      f'{XPM[hero].median:.0f}xpm'.rjust(5),
+      ]
+    print(delimiter.join(line))
+    
+def examineheroes(output=False,alphabetical=True,delimiter=' ',warn=True):
+  kdac={}
+  gpm={}
+  xpm={}
+  frequency={}
+  for hero in (HEROES[heroid]['localized_name'] for heroid in HEROES):
+    kdac[hero]=[]
+    gpm[hero]=[]
+    xpm[hero]=[]
+    frequency[hero]=0
+  for m in MATCHES:
+    for p in m.getplayers():
+      kdac[p.name].append(p.kdac)
+      gpm[p.name].append(p.gpm)
+      xpm[p.name].append(p.xpm)
+      frequency[p.name]+=1
+  for hero in kdac:
+    KDAC[hero]=Summary(kdac[hero])
+    GPM[hero]=Summary(gpm[hero])
+    XPM[hero]=Summary(xpm[hero])
+    if warn and frequency[hero]<MINIMUMHEROSAMPLE:
+      raise Exception(f'Not enough samples for {hero}: {frequency[hero]}/{MINIMUMHEROSAMPLE}.')
+  if output:
+    printheroes(frequency,alphabetical,delimiter)
 
-def examinemetrics():
-  GLOBAL['kdc']=Summary([p.kdc for p in PLAYERS])
-  GLOBAL['gpm']=Summary([p.gpm for p in PLAYERS],rounding=0)
-  GLOBAL['xpm']=Summary([p.xpm for p in PLAYERS],rounding=0)
-  print(f'cKPD\t{GLOBAL["kdc"]}')
-  print(f'GPM\t{GLOBAL["gpm"]}')
-  print(f'XPM\t{GLOBAL["xpm"]}')
-
-def examinematches(output=False,localstats=True,globalstats=False,herostats=False): #TODO
+def examinematches(output=True,matchstats=True,herostats=True):
   for m in MATCHES:
     players=[p for p in m.getplayers()]
-    kdc=Summary([p.kdc for p in players])
+    kdac=Summary([p.kdac for p in players])
     gpm=Summary([p.gpm for p in players],rounding=0)
     xpm=Summary([p.xpm for p in players],rounding=0)
     for p in players:
-      if localstats:
-        p.score+=kdc.score(p.kdc)
-        p.score+=gpm.score(p.gpm)
-        p.score+=xpm.score(p.xpm)
-      if globalstats:
-        p.score+=GLOBAL['kdc'].score(p.kdc)
-        p.score+=GLOBAL['gpm'].score(p.gpm)
-        p.score+=GLOBAL['xpm'].score(p.xpm)
+      scores=[]
+      if matchstats:
+        scores.extend([kdac.score(p.kdac),gpm.score(p.gpm),xpm.score(p.xpm)])
+      if herostats:
+        scores.extend([KDAC[p.name].score(p.kdac),GPM[p.name].score(p.gpm),XPM[p.name].score(p.xpm)])
+      assert len(scores)>0
+      p.score=statistics.median(scores)
+  global score
   score=Summary([p.score for p in PLAYERS],rounding=2)
-  nobs=[p for p in PLAYERS if abs(p.score)>score.median+score.deviation*2]
-  good=[n for n in nobs if n.score>0]
-  bad=[n for n in nobs if n.score<0]
+  for p in PLAYERS:
+    if p.isnob():
+      NOBS.append(p)
+        
+def examinemetrics(output=True): #used to calibrate and test overall metric sanity
   if output:
-    for n in nobs:
-      print(n)
-  print(f'Score\t{str(score)}')
-  print(f'{len(nobs)} nobs ({len(good)} positive, {len(bad)} negative) out of {len(PLAYERS)} players.')
+    print(f'cKPD\t{Summary([p.kdac for p in PLAYERS])}')
+    print(f'GPM\t{Summary([p.gpm for p in PLAYERS],rounding=0)}')
+    print(f'XPM\t{Summary([p.xpm for p in PLAYERS],rounding=0)}')
+    print(f'Score\t{str(score)}')
+    print()
       
+def printnobs(output=True,printall=False,randomize=False):
+  if output:
+    if printall:
+      if randomize:
+        random.shuffle(NOBS)
+      for n in NOBS:
+        print(n)
+    good=[]
+    bad=[]
+    for n in NOBS:
+      if n.score>0:
+        good.append(n)
+      else:
+        bad.append(n)
+    print(f'{len(NOBS)} nobs ({round(100*len(NOBS)/(len(MATCHES)*10))}% of players, {len(good)} positive, {len(bad)} negative).')
+    nobspermatch=[sum(p.isnob() for p in m.getplayers()) for m in MATCHES]
+    print(f'NOBS per match: {Summary(nobspermatch,rounding=0)}.')
+    balanced=sum(n==0 for n in nobspermatch)
+    print(f'Balanced matches: {round(100*balanced/len(MATCHES))}% ({balanced}).')
+    print()
 
 read()
-examinemetrics()
-examinematches(output=False)
-#printall()
-print(f'{len(MATCHES)} matches analyzed.')
+examineheroes(output=False,alphabetical=True,warn=False)
+examinematches(output=True)
+examinemetrics(output=True)
+printnobs(randomize=True)
+print(f'{len(MATCHES)} matches analyzed ({len(MATCHES)*10} players).')
