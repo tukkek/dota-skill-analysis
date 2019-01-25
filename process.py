@@ -15,6 +15,7 @@ BADNOBS=[]
 KDAC={} #hero summary per hero name
 GPM={} #hero summary per hero name
 XPM={} #hero summary per hero name
+ROLES={} #summary crunch by role name
 
 gkdac=None
 ggpm=None
@@ -114,10 +115,8 @@ class Summary:
     return int(r) if self.rounding==0 else r
   
   def __repr__(self):
-    r=''
-    r+=f'median {self.round(self.median)}\t'
-    r+=f'median deviation {self.round(self.deviation)}\t'
-    return r[:-1]
+    r=f'{self.round(self.median):5.1f}\t± {self.round(self.deviation):5.1f}\t'
+    return r
   
   def score(self,p):
     return 0 if self.deviation==0 else (p-self.median)/self.deviation
@@ -142,18 +141,28 @@ def printall():
   for m in MATCHES:
     print(m)
     
-def printheroes(frequency,alphabetical,delimiter):
-  for hero in (sorted(frequency) if alphabetical else sorted(frequency,key=lambda f:frequency[f],reverse=True)):
-    line=[
-      hero.center(NAMEPADDING),
-      str(frequency[hero]).rjust(4),
-      f'{KDAC[hero].median:.1f}kdac'.rjust(8),
-      f'{GPM[hero].median:.0f}gpm'.rjust(5),
-      f'{XPM[hero].median:.0f}xpm'.rjust(5),
-      ]
-    print(delimiter.join(line))
+def printheroes(frequency,output,alphabetical,delimiter,csv):
+  if alphabetical:
+    iterator=sorted(frequency) 
+  else:
+    iterator=sorted(frequency,key=lambda f:frequency[f],reverse=True)
+  csv.write('Hero;Matches;KDAC;GPM;XPM;\n')
+  for hero in iterator:
+    if output:
+      line=[
+        hero.center(NAMEPADDING),
+        str(frequency[hero]).rjust(4),
+        f'{KDAC[hero].median:.1f}kdac'.rjust(8),
+        f'{GPM[hero].median:.0f}gpm'.rjust(5),
+        f'{XPM[hero].median:.0f}xpm'.rjust(5),
+        ]
+      print(delimiter.join(line))
+    if csv:
+      parseable=[hero,frequency[hero],KDAC[hero].median,GPM[hero].median,XPM[hero].median,]
+      parseable=[str(data) for data in parseable]
+      csv.write(';'.join(parseable)+'\n')
     
-def examineheroes(output=False,alphabetical=True,delimiter=' ',warn=True):
+def examineheroes(output=False,alphabetical=True,delimiter=' ',warn=True,csv=open('heroes.csv','w')):
   kdac={}
   gpm={}
   xpm={}
@@ -175,8 +184,7 @@ def examineheroes(output=False,alphabetical=True,delimiter=' ',warn=True):
     XPM[hero]=Summary(xpm[hero])
     if warn and frequency[hero]<MINIMUMSAMPLESIZE:
       raise Exception(f'Not enough samples for {hero}: {frequency[hero]}/{MINIMUMSAMPLESIZE}.')
-  if output:
-    printheroes(frequency,alphabetical,delimiter)
+  printheroes(frequency,output,alphabetical,delimiter,csv)
 
 def crunch(players):
   kdac=[]
@@ -192,7 +200,18 @@ def crunch(players):
     'xpm':Summary(xpm,rounding=0),
   }
 
-def examinematches(output=True,teamstats=True,matchstats=True,herostats=True,globalstats=True):
+def scoreroles(player):
+  kdac=[]
+  gpm=[]
+  xpm=[]
+  for r in player.hero['roles']:
+    r=ROLES[r]
+    kdac.append(r['kdac'].score(player.kdac))
+    gpm.append(r['gpm'].score(player.gpm))
+    xpm.append(r['xpm'].score(player.xpm))
+  return [statistics.median(scores) for scores in [kdac,gpm,xpm]]
+
+def examinematches(output=True,team=True,match=True,hero=True,role=True,universal=True):
   global gkdac,ggpm,gxpm,gscore
   gkdac=Summary([p.kdac for p in PLAYERS])
   ggpm=Summary([p.gpm for p in PLAYERS],rounding=0)
@@ -204,17 +223,17 @@ def examinematches(output=True,teamstats=True,matchstats=True,herostats=True,glo
     dire=crunch(m.dire.players)
     for p in players:
       scores=[]
-      if teamstats:
+      if team:
         assert(p.team==m.radiant or p.team==m.dire)
         team=radiant if p.team==m.radiant else dire
-        #print(m)
-        #print(team)
         scores.extend([team['kdac'].score(p.kdac),team['gpm'].score(p.gpm),team['xpm'].score(p.xpm)])
-      if matchstats:
+      if match:
         scores.extend([match['kdac'].score(p.kdac),match['gpm'].score(p.gpm),match['xpm'].score(p.xpm)])
-      if herostats:
+      if hero:
         scores.extend([KDAC[p.name].score(p.kdac),GPM[p.name].score(p.gpm),XPM[p.name].score(p.xpm)])
-      if globalstats:
+      if role:
+        scores.extend(scoreroles(p))
+      if universal:
         scores.extend([gkdac.score(p.kdac),ggpm.score(p.gpm),gxpm.score(p.xpm)])
       assert len(scores)>0
       p.score=statistics.median(scores)
@@ -277,12 +296,34 @@ def examineimpact(output=False,parseable=open('impact.csv','w')):
         parseable.write(f'{score};{winrate};{frequency};\n')
   if output:
     print()
+    
+def examineroles(output=False):
+  roles=set(role for hero in HEROES.values() for role in hero['roles'])
+  for r in roles:
+    ROLES[r]={'kdac':[],'gpm':[],'xpm':[],}
+  for p in PLAYERS:
+    for r in p.hero['roles']:
+      ROLES[r]['kdac'].append(p.kdac)
+      ROLES[r]['gpm'].append(p.gpm)
+      ROLES[r]['xpm'].append(p.xpm)
+  for name in sorted(ROLES):
+    r=ROLES[name]
+    r['kdac']=Summary(r['kdac'])
+    r['gpm']=Summary(r['gpm'])
+    r['xpm']=Summary(r['xpm'])
+    if output:
+      print(name.center(10),r)
+
+def examinescores(output=False): #rank heroes/roles per score, maybe even radiant/dire?
+  pass
 
 read()
-examineheroes(warn=False)
+examineheroes()
+examineroles()
 examinematches()
 examinemetrics()
 printnobs()
 examineimpact()
+examinescores()
 #TODO would be cool to examine score per hero
 print(f'{len(MATCHES)} matches analyzed ({len(MATCHES)*10} players).')
