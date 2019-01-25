@@ -10,8 +10,6 @@ HEROES={hero['id']:hero for hero in json.load(open('heroes.json'))}
 MATCHES=[]
 PLAYERS=[]
 NOBS=[]
-GOODNOBS=[]
-BADNOBS=[]
 KDAC={} #hero summary per hero name
 GPM={} #hero summary per hero name
 XPM={} #hero summary per hero name
@@ -185,6 +183,23 @@ def examineheroes(output=False,alphabetical=True,delimiter=' ',warn=True,csv=ope
     if warn and frequency[hero]<MINIMUMSAMPLESIZE:
       raise Exception(f'Not enough samples for {hero}: {frequency[hero]}/{MINIMUMSAMPLESIZE}.')
   printheroes(frequency,output,alphabetical,delimiter,csv)
+    
+def examineroles(output=False):
+  roles=set(role for hero in HEROES.values() for role in hero['roles'])
+  for r in roles:
+    ROLES[r]={'kdac':[],'gpm':[],'xpm':[],}
+  for p in PLAYERS:
+    for r in p.hero['roles']:
+      ROLES[r]['kdac'].append(p.kdac)
+      ROLES[r]['gpm'].append(p.gpm)
+      ROLES[r]['xpm'].append(p.xpm)
+  for name in sorted(ROLES):
+    r=ROLES[name]
+    r['kdac']=Summary(r['kdac'])
+    r['gpm']=Summary(r['gpm'])
+    r['xpm']=Summary(r['xpm'])
+    if output:
+      print(name.center(10),r)
 
 def crunch(players):
   kdac=[]
@@ -261,12 +276,14 @@ def printnobs(output=True,printall=False,randomize=False):
         random.shuffle(NOBS)
       for n in NOBS:
         print(n)
+    good=[]
+    bad=[]
     for n in NOBS:
       if n.score>0:
-        GOODNOBS.append(n)
+        good.append(n)
       else:
-        BADNOBS.append(n)
-    print(f'{len(NOBS)} NOBs ({round(100*len(NOBS)/(len(MATCHES)*10))}% of players, {len(GOODNOBS)} positive, {len(BADNOBS)} negative).')
+        bad.append(n)
+    print(f'{len(NOBS)} NOBs ({round(100*len(NOBS)/(len(MATCHES)*10))}% of players, {len(good)} positive, {len(bad)} negative).')
     nobspermatch=[sum(p.isnob() for p in m.getplayers()) for m in MATCHES]
     print(f'NOBs per match: {Summary(nobspermatch,rounding=0)}.')
     balanced=sum(n==0 for n in nobspermatch)
@@ -291,32 +308,15 @@ def examineimpact(output=False,parseable=open('impact.csv','w')):
         total+=1
         if t.won:
           wins+=1
-    if total>=MINIMUMSAMPLESIZE:
+    frequency=round(100*total/(len(MATCHES)*2))
+    if frequency>=10:
       winrate=round(100*wins/total)
-      frequency=round(100*total/(len(MATCHES)*2))
       if output:
         print(f'Presence of {score} score predicts a {winrate}% win rate (present in {frequency}% of teams).')
       if parseable:
         parseable.write(f'{score};{winrate};{frequency};\n')
   if output:
     print()
-    
-def examineroles(output=False):
-  roles=set(role for hero in HEROES.values() for role in hero['roles'])
-  for r in roles:
-    ROLES[r]={'kdac':[],'gpm':[],'xpm':[],}
-  for p in PLAYERS:
-    for r in p.hero['roles']:
-      ROLES[r]['kdac'].append(p.kdac)
-      ROLES[r]['gpm'].append(p.gpm)
-      ROLES[r]['xpm'].append(p.xpm)
-  for name in sorted(ROLES):
-    r=ROLES[name]
-    r['kdac']=Summary(r['kdac'])
-    r['gpm']=Summary(r['gpm'])
-    r['xpm']=Summary(r['xpm'])
-    if output:
-      print(name.center(10),r)
 
 def examinescores(output=False): #rank heroes/roles per score, maybe even radiant/dire?
   pass
