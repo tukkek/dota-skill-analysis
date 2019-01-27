@@ -8,8 +8,8 @@ NOBLIMIT=2
 INPUTDIR='matches'
 HEROES={hero['id']:hero for hero in json.load(open('heroes.json'))}
 MATCHES=[]
+TEAMS=[]
 PLAYERS=[]
-NOBS=[]
 KDAC={} #hero summary per hero name
 GPM={} #hero summary per hero name
 XPM={} #hero summary per hero name
@@ -45,14 +45,17 @@ class Player:
     r+=f'    Score {self.score:.0f}\n'
     return r[:-1]
   
-  def isnob(self,absolute=True):
+  '''def isnob(self,absolute=True):
     score=abs(self.score)
-    return score>=NOBLIMIT if absolute else score>=gscore.median+gscore.deviation*NOBLIMIT
+    return score>=NOBLIMIT if absolute else score>=gscore.median+gscore.deviation*NOBLIMIT'''
 
 class Team:
   def __init__(self):
     self.players=[]
     self.won=False
+    self.best=None
+    self.worst=None
+    TEAMS.append(self)
   
   def __repr__(self):
     r=''
@@ -62,19 +65,25 @@ class Team:
   
   def win(self):
     return " (winner)" if self.won else ""
-  
-  def haspositivenob(self,score):
-    for p in self.players:
-      if p.score>=score:
-        return True
-    return False
-  
-  def hasnegativenob(self,score):
-    for p in self.players:
-      if p.score<=score:
-        return True
-    return False
 
+  def examine(self):
+    skill=statistics.median([p.score for p in self.players])
+    relative=[]
+    for p in self.players:
+      p.relativescore=p.score-skill
+      relative.append(p.relativescore)
+    self.worst=min(relative)
+    self.best=max(relative)
+    
+  def getgoodnobs(self):
+    return [p for p in self.players if p.relativescore>=NOBLIMIT]
+    
+  def getbadnobs(self):
+    return [p for p in self.players if p.relativescore<=-NOBLIMIT]
+  
+  def getnobs(self):
+    return self.getgoodnobs()+self.getbadnobs()
+  
 class Match:
   def __init__(self,data):
     #self.duration=int(data['duration']/60)
@@ -257,9 +266,6 @@ def examinematches(output=True,team=True,match=True,hero=True,role=True,universa
       playerteam=radiant if p.team==m.radiant else dire
       p.score=score(p,playerteam,match,hero,role,universal)
   gscore=Summary([p.score for p in PLAYERS],rounding=2)
-  for p in PLAYERS:
-    if p.isnob():
-      NOBS.append(p)
         
 def examinemetrics(output=True): #used to calibrate and test overall metric sanity
   if output:
@@ -269,47 +275,54 @@ def examinemetrics(output=True): #used to calibrate and test overall metric sani
     print(f'Score\t{str(gscore)}')
     print()
       
-def printnobs(output=True,printall=False,randomize=False):
+def examinenobs(output=True,printall=False,randomize=False):
   if output:
     if printall:
       if randomize:
         random.shuffle(NOBS)
       for n in NOBS:
         print(n)
-    good=[]
-    bad=[]
-    for n in NOBS:
-      if n.score>0:
-        good.append(n)
-      else:
-        bad.append(n)
-    print(f'{len(NOBS)} NOBs ({round(100*len(NOBS)/(len(MATCHES)*10))}% of players, {len(good)} positive, {len(bad)} negative).')
-    nobspermatch=[sum(p.isnob() for p in m.getplayers()) for m in MATCHES]
+    print(f'Median relative player skill: {Summary([p.relativescore for m in MATCHES for p in m.getplayers()])}.')
+    goodnobs=[n for t in TEAMS for n in t.getgoodnobs()]
+    badnobs=[n for t in TEAMS for n in t.getbadnobs()]
+    totalnobs=len(goodnobs)+len(badnobs)
+    print(f'{totalnobs} NOBs ({round(100*(totalnobs)/(len(MATCHES)*10))}% of players, {len(goodnobs)} positive, {len(badnobs)} negative).')
+    nobspermatch=[sum(len(team.getnobs()) for team in [m.radiant,m.dire]) for m in MATCHES]
     print(f'NOBs per match: {Summary(nobspermatch,rounding=0)}.')
-    balanced=sum(n==0 for n in nobspermatch)
-    print(f'Balanced matches: {round(100*balanced/len(MATCHES))}% ({balanced}).')
+    unbalanced=sum([len(m.radiant.getnobs()+m.dire.getnobs())>0 for m in MATCHES])
+    print(f'Unbalanced matches: {round(100*unbalanced/len(MATCHES))}% ({unbalanced}).')
+    print(f'Median good NOB: {Summary([n.relativescore for n in goodnobs])}.')
+    print(f'Median bad NOB: {Summary([n.relativescore for n in badnobs])}.')
     print()
     
+def countwins(score):
+  wins=0
+  total=0
+  for t in TEAMS:
+    if (score>0 and t.best>=score) or (score<0 and t.worst<=score) or score==0:
+      total+=1
+      if t.won:
+        wins+=1
+  return wins,total
+    
 def examineimpact(output=False,parseable=open('impact.csv','w')):
+  best=-9000
+  worst=+9000
+  scores=set()
+  for t in TEAMS:
+    t.examine()
+    scores.add(round(t.best,1))
+    scores.add(round(t.worst,1))
+    if t.best>best:
+      best=t.best
+    if t.worst<worst:
+      worst=t.worst
   if parseable:
     parseable.write(f'Score;Win rate (%);Frequency in teams (%);\n')
-  teams=[]
-  for m in MATCHES:
-    teams.append(m.radiant)
-    teams.append(m.dire)
-  scores=set()
-  for p in PLAYERS:
-    scores.add(round(p.score,1))
   for score in sorted(scores):
-    wins=0
-    total=0
-    for t in teams:
-      if (score>0 and t.haspositivenob(score)) or (score<0 and t.hasnegativenob(score)) or score==0:
-        total+=1
-        if t.won:
-          wins+=1
-    frequency=round(100*total/(len(MATCHES)*2))
-    if frequency>=10:
+    wins,total=countwins(score)
+    if total>=MINIMUMSAMPLESIZE:
+      frequency=round(100*total/(len(MATCHES)*2))
       winrate=round(100*wins/total)
       if output:
         print(f'Presence of {score} score predicts a {winrate}% win rate (present in {frequency}% of teams).')
@@ -318,16 +331,15 @@ def examineimpact(output=False,parseable=open('impact.csv','w')):
   if output:
     print()
 
-def examinescores(output=False): #rank heroes/roles per score, maybe even radiant/dire?
+def examinescores(output=False): #TODO rank heroes/roles per score, maybe even radiant/dire?
   pass
 
 read()
 examineheroes()
 examineroles()
 examinematches()
-examinemetrics()
-printnobs()
 examineimpact()
+examinemetrics()
+examinenobs()
 examinescores()
-#TODO would be cool to examine score per hero
 print(f'{len(MATCHES)} matches analyzed ({len(MATCHES)*10} players).')
