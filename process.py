@@ -31,23 +31,17 @@ class Player:
     self.kdac=self.kills+self.assists/10-self.deaths
     self.gpm=data['gold_per_min']
     self.xpm=data['xp_per_min']
-    #self.level=data['level']
     self.score=0
   
   def __repr__(self):
     r=''
     r+=f'  {self.name}\n'
-    #r+=f'    Level {self.level}\n'
     r+=f'    KDA {self.kills}/{self.deaths}/{self.assists}\n'
     r+=f'    KDAC {self.kdac:.1f}\n'
     r+=f'    GPM {self.gpm}\n'
     r+=f'    XPM {self.xpm}\n'
     r+=f'    Score {self.score:.0f}\n'
     return r[:-1]
-  
-  '''def isnob(self,absolute=True):
-    score=abs(self.score)
-    return score>=NOBLIMIT if absolute else score>=gscore.median+gscore.deviation*NOBLIMIT'''
 
 class Team:
   def __init__(self):
@@ -86,7 +80,6 @@ class Team:
   
 class Match:
   def __init__(self,data):
-    #self.duration=int(data['duration']/60)
     self.radiant=Team()
     self.dire=Team()
     winner=self.radiant if data['radiant_win'] else self.dire
@@ -99,7 +92,6 @@ class Match:
     
   def __repr__(self):
     r=''
-    #r+=f'Duration: {self.duration}m\n'
     r+=f'Radiant{self.radiant.win()}: \n{repr(self.radiant)}';
     r+=f'Dire{self.dire.win()}: \n{repr(self.dire)}';
     return r
